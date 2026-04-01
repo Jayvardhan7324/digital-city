@@ -114,7 +114,6 @@ function loadMarkerCluster(): Promise<void> {
     if ((window as any).L?.markerClusterGroup) { resolve(); return; }
     if (!document.querySelector('link[href*="MarkerCluster.css"]')) {
       ["https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css",
-       "https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css",
       ].forEach((href) => {
         const link = document.createElement("link");
         link.rel = "stylesheet"; link.href = href;
@@ -223,16 +222,17 @@ function MapViewInner({
     };
   }, []);
 
-  // ── Update Heatmap Layer ──
+  // ── Update Heatmap Layers ──
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     let cancelled = false;
     (async () => {
-      if (heatLayerRef.current) { map.removeLayer(heatLayerRef.current); heatLayerRef.current = null; }
+      heatLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
+      heatLayersRef.current = [];
 
-      const activeHeatLayer = HEATMAP_LAYERS.find((l) => activeLayers.includes(l));
-      if (!activeHeatLayer || heatPoints.length === 0) return;
+      const activeHeatLayers = HEATMAP_LAYERS.filter((l) => activeLayers.includes(l));
+      if (activeHeatLayers.length === 0) return;
 
       await loadLeafletHeat();
       if (cancelled) return;
@@ -240,15 +240,19 @@ function MapViewInner({
       const L = (window as any).L;
       if (!L?.heatLayer) return;
 
-      const gradient = HEATMAP_GRADIENT[activeHeatLayer] || HEATMAP_GRADIENT.crime;
-      const latlngs = heatPoints.map((p) => [p.lat, p.lng, p.intensity]);
-      const heat = L.heatLayer(latlngs, { radius: 30, blur: 22, maxZoom: 15, max: 1.0, gradient, minOpacity: 0.4 });
-      heat.addTo(map);
-      heatLayerRef.current = heat;
+      for (const layerId of activeHeatLayers) {
+        const points = layerData[layerId] || [];
+        if (points.length === 0) continue;
+        const gradient = HEATMAP_GRADIENT[layerId] || HEATMAP_GRADIENT.crime;
+        const latlngs = points.map((p) => [p.lat, p.lng, p.intensity]);
+        const heat = L.heatLayer(latlngs, { radius: 30, blur: 22, maxZoom: 15, max: 1.0, gradient, minOpacity: 0.4 });
+        heat.addTo(map);
+        heatLayersRef.current.push(heat);
+      }
     })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [heatPoints, activeLayers, mapInitialized]);
+  }, [layerData, activeLayers, mapInitialized]);
 
   // ── Update Dot Markers with Clustering ──
   useEffect(() => {
@@ -259,71 +263,74 @@ function MapViewInner({
       dotLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
       dotLayersRef.current = [];
 
-      const activeDotLayer = DOT_LAYERS.find((l) => activeLayers.includes(l));
-      if (!activeDotLayer || heatPoints.length === 0) return;
+      const activeDotLayers = DOT_LAYERS.filter((l) => activeLayers.includes(l));
+      if (activeDotLayers.length === 0) return;
 
       const L = await import("leaflet");
       await loadMarkerCluster();
       if (cancelled) return;
 
-      const colors = DOT_COLORS[activeDotLayer];
-
       const WL = (window as any).L;
       if (!WL?.markerClusterGroup) return;
 
-      const clusterGroup = WL.markerClusterGroup({
-        maxClusterRadius: 60,
-        showCoverageOnHover: false,
-        iconCreateFunction: (cluster: any) => {
-          const count = cluster.getChildCount();
-          const size = count >= 100 ? 46 : count >= 20 ? 38 : 30;
-          return WL.divIcon({
-            className: "",
-            html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
-              background:${colors.fill};border:2px solid ${colors.stroke};
-              display:flex;align-items:center;justify-content:center;
-              color:#fff;font-size:${size >= 38 ? 13 : 11}px;font-weight:700;
-              box-shadow:0 2px 10px rgba(0,0,0,0.55)">${count}</div>`,
-            iconSize: [size, size], iconAnchor: [size / 2, size / 2],
-          });
-        },
-      });
+      for (const activeDotLayer of activeDotLayers) {
+        const points = layerData[activeDotLayer] || [];
+        if (points.length === 0) continue;
 
-      for (const p of heatPoints) {
-        let marker: any;
+        const colors = DOT_COLORS[activeDotLayer];
 
-        if (activeDotLayer === "stp") {
-          const icon = L.divIcon({
-            className: "",
-            html: `<div style="width:18px;height:18px;border-radius:3px;
-              background:${colors.fill};border:2px solid ${colors.stroke};
-              display:flex;align-items:center;justify-content:center;
-              font-size:11px;box-shadow:0 1px 4px rgba(0,0,0,0.5)">🏭</div>`,
-            iconSize: [18, 18], iconAnchor: [9, 9],
-          });
-          marker = L.marker([p.lat, p.lng], { icon });
-        } else {
-          const size = 8 + Math.round(p.intensity * 6);
-          const icon = L.divIcon({
-            className: "",
-            html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
-              background:${colors.fill};border:1.5px solid ${colors.stroke};
-              box-shadow:0 1px 4px rgba(0,0,0,0.5);opacity:0.9"></div>`,
-            iconSize: [size, size],
-            iconAnchor: [size / 2, size / 2],
-          });
-          marker = L.marker([p.lat, p.lng], { icon });
+        const clusterGroup = WL.markerClusterGroup({
+          maxClusterRadius: 60,
+          showCoverageOnHover: false,
+          iconCreateFunction: (cluster: any) => {
+            const count = cluster.getChildCount();
+            const size = count >= 100 ? 46 : count >= 20 ? 38 : 30;
+            return WL.divIcon({
+              className: "",
+              html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
+                background:${colors.fill};border:2px solid ${colors.stroke};
+                display:flex;align-items:center;justify-content:center;
+                color:#fff;font-size:${size >= 38 ? 13 : 11}px;font-weight:700;
+                box-shadow:0 2px 10px rgba(0,0,0,0.55)">${count}</div>`,
+              iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+            });
+          },
+        });
+
+        for (const p of points) {
+          let marker: any;
+          if (activeDotLayer === "stp") {
+            const icon = L.divIcon({
+              className: "",
+              html: `<div style="width:18px;height:18px;border-radius:3px;
+                background:${colors.fill};border:2px solid ${colors.stroke};
+                display:flex;align-items:center;justify-content:center;
+                font-size:11px;box-shadow:0 1px 4px rgba(0,0,0,0.5)">🏭</div>`,
+              iconSize: [18, 18], iconAnchor: [9, 9],
+            });
+            marker = L.marker([p.lat, p.lng], { icon });
+          } else {
+            const size = 8 + Math.round(p.intensity * 6);
+            const icon = L.divIcon({
+              className: "",
+              html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
+                background:${colors.fill};border:1.5px solid ${colors.stroke};
+                box-shadow:0 1px 4px rgba(0,0,0,0.5);opacity:0.9"></div>`,
+              iconSize: [size, size],
+              iconAnchor: [size / 2, size / 2],
+            });
+            marker = L.marker([p.lat, p.lng], { icon });
+          }
+          clusterGroup.addLayer(marker);
         }
 
-        clusterGroup.addLayer(marker);
+        clusterGroup.addTo(map);
+        dotLayersRef.current.push(clusterGroup);
       }
-
-      clusterGroup.addTo(map);
-      dotLayersRef.current.push(clusterGroup);
     })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [heatPoints, activeLayers, mapInitialized]);
+  }, [layerData, activeLayers, mapInitialized]);
 
   // ── Update Flood Circles ──
   useEffect(() => {

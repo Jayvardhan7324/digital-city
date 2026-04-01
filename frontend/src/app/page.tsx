@@ -53,9 +53,6 @@ const LAYERS = [
   { id: "stp",              label: "STP Plants",          icon: Zap,           kml: false },
   { id: "street_dogs",      label: "Street Dogs",         icon: Dog,           kml: false },
   { id: "crashes",          label: "Road Crashes",        icon: Siren,         kml: false },
-  { id: "ground_potential", label: "Ground Potential",    icon: Map,           kml: true  },
-  { id: "road_width",       label: "Road Width",          icon: Map,           kml: true  },
-  { id: "wards",            label: "Ward Boundaries",     icon: Map,           kml: true  },
 ];
 
 const CRIME_SOURCES = [
@@ -67,7 +64,7 @@ const API = "http://localhost:8000";
 
 export default function HomePage() {
   const [activeLayers, setActiveLayers] = useState<string[]>(["flood"]);
-  const [heatPoints, setHeatPoints] = useState<HeatPoint[]>([]);
+  const [layerData, setLayerData] = useState<Record<string, HeatPoint[]>>({});
   const [floodFeatures, setFloodFeatures] = useState<FloodFeature[]>([]);
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [showFacilities, setShowFacilities] = useState(false);
@@ -106,7 +103,8 @@ export default function HomePage() {
     try {
       const r = await fetch(`${API}/heatmap/${endpoint}`);
       const d = await r.json();
-      setHeatPoints(Array.isArray(d) ? d : (d.points || []));
+      const points = Array.isArray(d) ? d : (d.points || []);
+      setLayerData(prev => ({ ...prev, [layer]: points }));
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crimeSource]);
@@ -142,7 +140,7 @@ export default function HomePage() {
       setGeoJsonLayer({ id: file.name, features });
       setKmlFileName(file.name);
       setActiveLayers([]);
-      setHeatPoints([]);
+      setLayerData({});
       setStatusMsg(`${file.name} — ${features.length} features`);
     } catch {
       setStatusMsg("Could not parse KML/KMZ file");
@@ -167,11 +165,12 @@ export default function HomePage() {
 
   const fetchDataset = useCallback(async (id: string) => {
     setSelectedDataset(id || null);
-    if (!id) { setHeatPoints([]); return; }
+    if (!id) { setLayerData(prev => { const n = { ...prev }; delete n["__dataset__"]; return n; }); return; }
     try {
       const r = await fetch(`${API}/datasets/${id}`);
       const d = await r.json();
-      setHeatPoints((d.points || []).map((p: any) => ({ lat: p.lat, lng: p.lng, intensity: p.intensity ?? 0.7 })));
+      const points = (d.points || []).map((p: any) => ({ lat: p.lat, lng: p.lng, intensity: p.intensity ?? 0.7 }));
+      setLayerData(prev => ({ ...prev, "__dataset__": points }));
       setStatusMsg(`${d.label} — ${d.count} points`);
     } catch { setStatusMsg("Could not load dataset"); }
   }, []);
@@ -204,17 +203,13 @@ export default function HomePage() {
   useEffect(() => { fetchFlood(); fetchInsights(); }, []);
 
   const toggleLayer = (id: string) => {
-    const layer = LAYERS.find((l) => l.id === id);
     if (activeLayers.includes(id)) {
-      setActiveLayers([]);
-      setHeatPoints([]);
-      setGeoJsonLayer(null);
+      setActiveLayers(prev => prev.filter(l => l !== id));
+      setLayerData(prev => { const n = { ...prev }; delete n[id]; return n; });
+      if (id === "flood") setFloodFeatures([]);
     } else {
-      setActiveLayers([id]);
-      setHeatPoints([]);
-      setGeoJsonLayer(null);
+      setActiveLayers(prev => [...prev, id]);
       if (id === "flood") fetchFlood();
-      else if (layer?.kml) fetchKmlLayer(id);
       else fetchHeatLayer(id);
     }
   };
@@ -409,7 +404,7 @@ export default function HomePage() {
       <div className="flex-1 relative m-2 ml-0 rounded-xl overflow-hidden">
         <MapView
           activeLayers={activeLayers}
-          heatPoints={heatPoints}
+          layerData={layerData}
           floodFeatures={floodFeatures}
           facilities={facilities}
           showFacilities={showFacilities}
