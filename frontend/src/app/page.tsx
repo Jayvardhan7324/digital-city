@@ -9,9 +9,9 @@ import GroqInsightButton from "@/components/GroqInsightButton";
 import type { SimulationResult, GeoFeature } from "@/components/MapView";
 import {
   Layers, Cloud, Car, Activity, Trash2, AlertTriangle, Siren,
-  ChevronRight, RefreshCw, MapPin, BarChart3, Building2, Droplets,
+  ChevronRight, RefreshCw, MapPin, BarChart3, Building2,
   ShieldAlert, MapPinned, Crosshair, X, Dog, Zap, Waves,
-  Map, MessageSquare, Send, Loader2, Upload,
+  Map, MessageSquare, Send, Loader2, Upload, Banknote, CloudRain, Wind, Users,
 } from "lucide-react";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
@@ -31,11 +31,6 @@ const MapView = dynamic(() => import("@/components/MapView"), {
 });
 
 interface HeatPoint { lat: number; lng: number; intensity: number; }
-interface FloodFeature {
-  type: string;
-  properties: { name: string; risk: "HIGH" | "MEDIUM" | "LOW"; score: number; elevation_m: number; drainage_score: number; };
-  geometry: { type: string; coordinates: [number, number]; };
-}
 interface Facility {
   type: string;
   properties: { id: string; name: string; facility_type: string; amenity?: string; phone?: string; operator?: string; };
@@ -44,7 +39,6 @@ interface Facility {
 interface Weakness { zone: string; issue: string; severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"; recommendation: string; }
 
 const LAYERS = [
-  { id: "flood",            label: "Flood Risk",         icon: Droplets,      kml: false },
   { id: "traffic",          label: "Traffic",             icon: Car,           kml: false },
   { id: "crime",            label: "Crime",               icon: Activity,      kml: false },
   { id: "garbage_dump",     label: "Garbage Dumps",       icon: Trash2,        kml: false },
@@ -53,6 +47,11 @@ const LAYERS = [
   { id: "stp",              label: "STP Plants",          icon: Zap,           kml: false },
   { id: "street_dogs",      label: "Street Dogs",         icon: Dog,           kml: false },
   { id: "crashes",          label: "Road Crashes",        icon: Siren,         kml: false },
+  { id: "tax_collection",   label: "Tax Collection",      icon: Banknote,      kml: false },
+  { id: "weather_station",  label: "Weather Stations",    icon: CloudRain,     kml: false },
+  { id: "bescom",           label: "BESCOM Substations",  icon: Zap,           kml: false },
+  { id: "aqi",             label: "Air Quality (AQI)",   icon: Wind,          kml: false },
+  { id: "population",     label: "Population Density",  icon: Users,         kml: false },
 ];
 
 const CRIME_SOURCES = [
@@ -63,9 +62,8 @@ const CRIME_SOURCES = [
 const API = "http://localhost:8000";
 
 export default function HomePage() {
-  const [activeLayers, setActiveLayers] = useState<string[]>(["flood"]);
+  const [activeLayers, setActiveLayers] = useState<string[]>([]);
   const [layerData, setLayerData] = useState<Record<string, HeatPoint[]>>({});
-  const [floodFeatures, setFloodFeatures] = useState<FloodFeature[]>([]);
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [showFacilities, setShowFacilities] = useState(false);
   const [loadingFacilities, setLoadingFacilities] = useState(false);
@@ -88,20 +86,12 @@ export default function HomePage() {
   const kmlFileRef = useRef<HTMLInputElement>(null);
 
   // ── data fetching ──
-  const fetchFlood = useCallback(async () => {
-    try {
-      const r = await fetch(`${API}/flood/risk?rainfall=80`);
-      const d = await r.json();
-      setFloodFeatures(d.features || []);
-      // No status message for flood — it loads silently
-    } catch {}
-  }, []);
-
   const fetchHeatLayer = useCallback(async (layer: string, source?: string) => {
-    if (layer === "flood") return;
-    const endpoint = layer === "crime" ? (source ?? crimeSource) : layer;
+    const url = layer === "aqi"
+      ? `${API}/aqi/stations`
+      : `${API}/heatmap/${layer === "crime" ? (source ?? crimeSource) : layer}`;
     try {
-      const r = await fetch(`${API}/heatmap/${endpoint}`);
+      const r = await fetch(url);
       const d = await r.json();
       const points = Array.isArray(d) ? d : (d.points || []);
       setLayerData(prev => ({ ...prev, [layer]: points }));
@@ -200,17 +190,15 @@ export default function HomePage() {
 
   const clearSimulation = () => { setSimulationResult(null); setSimulationMode("none"); setStatusMsg(null); };
 
-  useEffect(() => { fetchFlood(); fetchInsights(); }, []);
+  useEffect(() => { fetchInsights(); }, []);
 
   const toggleLayer = (id: string) => {
     if (activeLayers.includes(id)) {
       setActiveLayers(prev => prev.filter(l => l !== id));
       setLayerData(prev => { const n = { ...prev }; delete n[id]; return n; });
-      if (id === "flood") setFloodFeatures([]);
     } else {
       setActiveLayers(prev => [...prev, id]);
-      if (id === "flood") fetchFlood();
-      else fetchHeatLayer(id);
+      fetchHeatLayer(id);
     }
   };
 
@@ -343,7 +331,7 @@ export default function HomePage() {
               </p>
               <div className="flex gap-1 mb-2">
                 {[
-                  { id: "crime", label: "Crime", icon: Crosshair, activeClass: "bg-green-600 text-white border-transparent", hoverClass: "hover:bg-green-600/20 hover:text-green-400 hover:border-green-600/30" },
+                  { id: "crime", label: "Crime", icon: Crosshair, activeClass: "bg-red-600 text-white border-transparent", hoverClass: "hover:bg-red-600/20 hover:text-red-400 hover:border-red-600/30" },
                   { id: "rain",  label: "Rain",  icon: Cloud,     activeClass: "bg-blue-600 text-white border-transparent",  hoverClass: "hover:bg-blue-600/20 hover:text-blue-400 hover:border-blue-600/30" },
                 ].map(({ id, label, icon: Icon, activeClass, hoverClass }) => (
                   <button key={id}
@@ -405,7 +393,6 @@ export default function HomePage() {
         <MapView
           activeLayers={activeLayers}
           layerData={layerData}
-          floodFeatures={floodFeatures}
           facilities={facilities}
           showFacilities={showFacilities}
           onMapClick={handleMapClick}

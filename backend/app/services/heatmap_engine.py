@@ -18,6 +18,10 @@ _GARBAGE_CSV  = _DATASETS / "garbage_dump_banglore.csv"
 _STP_CSV      = _DATASETS / "stp.csv.csv"
 _DOGS_CSV     = _DATASETS / "street_dogs_banglore.csv"
 _CRASHES_CSV  = _DATASETS / "btp_2025_station_wise.csv"
+_TAX_CSV      = _DATASETS / "tax_collection_with_coords.csv"
+_WEATHER_CSV  = _DATASETS / "weather_stations_with_coords.csv"
+_BESCOM_CSV      = _DATASETS / "bescom_with_latlon.csv"
+_POPULATION_CSV  = _DATASETS / "population_with_latlon.csv"
 
 # BBMP zone → approximate centroid coordinates
 _ZONE_COORDS: Dict[str, tuple] = {
@@ -254,6 +258,156 @@ def _load_btp_crashes() -> List[Dict]:
     return points
 
 
+def _load_tax_csv() -> List[Dict]:
+    """Load tax collection points — latest financial year only."""
+    rows = []
+    try:
+        with open(_TAX_CSV, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    year = row.get("Finacial Year", row.get("Financial Year", "")).strip()
+                    rows.append({
+                        "lat":    float(row["Latitude"]),
+                        "lng":    float(row["Longitude"]),
+                        "amount": float(row.get("Total Collection (Amount in lakhs)", "0") or "0"),
+                        "ward":   row.get("BBMP Ward", "").strip(),
+                        "zone":   row.get("BBMP Zone", "").strip(),
+                        "apps":   row.get("No of Applications", "").strip(),
+                        "year":   year,
+                    })
+                except (ValueError, KeyError):
+                    continue
+    except FileNotFoundError:
+        return []
+
+    if not rows:
+        return []
+
+    latest_year = max(r["year"] for r in rows if r["year"])
+    rows = [r for r in rows if r["year"] == latest_year]
+
+    max_amount = max((r["amount"] for r in rows), default=1.0) or 1.0
+    points = []
+    for r in rows:
+        intensity = round(min(1.0, r["amount"] / max_amount), 3)
+        label = (
+            f'<div style="font-family:sans-serif;font-size:12px">'
+            f'<b>{r["ward"]}</b><br/>'
+            f'<span style="color:#b8860b">BBMP {r["zone"]} Zone</span><br/>'
+            f'FY {r["year"]}<br/>'
+            f'Collection: <b>₹{r["amount"]:.2f}L</b><br/>'
+            f'Applications: {r["apps"]}'
+            f'</div>'
+        )
+        points.append({"lat": r["lat"], "lng": r["lng"], "intensity": intensity, "label": label})
+    return points
+
+
+def _load_bescom_csv() -> List[Dict]:
+    """Load BESCOM substation locations from bescom_with_latlon.csv."""
+    points = []
+    max_voltage = 400.0
+    try:
+        with open(_BESCOM_CSV, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    voltage = float(row.get("Voltage Class (in kV)", "0") or "0")
+                    name = row.get("Name of Sub-Station", "").strip()
+                    zone = row.get("Zone", "").strip()
+                    taluk = row.get("Taluk", "").strip()
+                    commissioned = row.get("Date of commission", "").strip()
+                    label = (
+                        f'<div style="font-family:sans-serif;font-size:12px">'
+                        f'<b>{name}</b><br/>'
+                        f'<span style="color:#ff9500">{zone} Zone</span><br/>'
+                        f'Taluk: {taluk}<br/>'
+                        f'Voltage: <b>{int(voltage)} kV</b><br/>'
+                        f'Commissioned: {commissioned}'
+                        f'</div>'
+                    )
+                    points.append({
+                        "lat": float(row["Latitude"]),
+                        "lng": float(row["Longitude"]),
+                        "intensity": round(min(1.0, voltage / max_voltage), 3),
+                        "label": label,
+                    })
+                except (ValueError, KeyError):
+                    continue
+    except FileNotFoundError:
+        pass
+    return points
+
+
+def _load_population_csv() -> List[Dict]:
+    """Load ward-level population data from population_with_latlon.csv."""
+    rows = []
+    try:
+        with open(_POPULATION_CSV, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    pop = int(row.get("Population", "0").replace(",", "") or "0")
+                    male = int(row.get("Male", "0").replace(",", "") or "0")
+                    female = int(row.get("Female", "0").replace(",", "") or "0")
+                    rows.append({
+                        "lat":         float(row["Latitude"]),
+                        "lng":         float(row["Longitude"]),
+                        "population":  pop,
+                        "male":        male,
+                        "female":      female,
+                        "ward":        row.get("Ward Name", "").strip(),
+                        "ward_num":    row.get("Ward Num", "").strip(),
+                        "constituency":row.get("Assembly constituency", "").strip(),
+                    })
+                except (ValueError, KeyError):
+                    continue
+    except FileNotFoundError:
+        return []
+
+    if not rows:
+        return []
+
+    max_pop = max((r["population"] for r in rows), default=1) or 1
+    points = []
+    for r in rows:
+        intensity = round(min(1.0, r["population"] / max_pop), 3)
+        label = (
+            f'<div style="font-family:sans-serif;font-size:12px">'
+            f'<b>Ward {r["ward_num"]}: {r["ward"]}</b><br/>'
+            f'Population: <b>{r["population"]:,}</b><br/>'
+            f'Male: {r["male"]:,} &nbsp; Female: {r["female"]:,}<br/>'
+            f'<span style="color:#7b9cff">{r["constituency"]}</span>'
+            f'</div>'
+        )
+        points.append({"lat": r["lat"], "lng": r["lng"], "intensity": intensity, "label": label})
+    return points
+
+
+def _load_weather_stations() -> List[Dict]:
+    """Load automated weather station locations from weather_stations_with_coords.csv."""
+    points = []
+    try:
+        with open(_WEATHER_CSV, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    points.append({
+                        "lat": float(row["Latitude"]),
+                        "lng": float(row["Longitude"]),
+                        "intensity": 0.7,
+                        "location": row.get("Hobli/GP/Location", "").strip(),
+                        "taluk": row.get("Taluk", "").strip(),
+                        "commissioned": row.get("Date of Commission", "").strip(),
+                    })
+                except (ValueError, KeyError):
+                    continue
+    except FileNotFoundError:
+        pass
+    return points
+
+
 def _jitter_points(base: List[tuple], count: int = 5, spread: float = 0.015, seed: int = 42) -> List[Dict]:
     rng = random.Random(seed)
     points = []
@@ -327,6 +481,14 @@ def get_layer(layer_id: str, extra_points: List[Dict] = None) -> List[Dict]:
         base = _load_street_dogs()
     elif layer_id == "crashes":
         base = _load_btp_crashes()
+    elif layer_id == "tax_collection":
+        base = _load_tax_csv()
+    elif layer_id == "weather_station":
+        base = _load_weather_stations()
+    elif layer_id == "bescom":
+        base = _load_bescom_csv()
+    elif layer_id == "population":
+        base = _load_population_csv()
     else:
         return []
 

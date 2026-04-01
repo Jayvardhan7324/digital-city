@@ -3,13 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
-export interface HeatPoint { lat: number; lng: number; intensity: number; }
-
-export interface FloodFeature {
-  type: string;
-  properties: { name: string; risk: "HIGH" | "MEDIUM" | "LOW"; score: number; elevation_m: number; drainage_score: number; };
-  geometry: { type: string; coordinates: [number, number]; };
-}
+export interface HeatPoint { lat: number; lng: number; intensity: number; label?: string; color?: string; }
 
 export interface Facility {
   type: string;
@@ -44,7 +38,6 @@ export interface GeoFeature {
 interface MapViewProps {
   activeLayers: string[];
   layerData: Record<string, HeatPoint[]>;
-  floodFeatures: FloodFeature[];
   facilities: Facility[];
   showFacilities: boolean;
   onMapClick: (lat: number, lng: number) => void;
@@ -54,13 +47,6 @@ interface MapViewProps {
   onSimulate: (lat: number, lng: number) => void;
   geoJsonLayer?: { id: string; features: GeoFeature[] } | null;
 }
-
-const RISK_COLORS: Record<string, { fill: string; border: string }> = {
-  HIGH:   { fill: "rgba(255,50,50,0.35)",   border: "#ff3232" },
-  MEDIUM: { fill: "rgba(255,165,0,0.30)",   border: "#ffa500" },
-  LOW:    { fill: "rgba(60,220,100,0.25)",  border: "#3cdc64" },
-};
-const RISK_RADIUS: Record<string, number> = { HIGH: 1200, MEDIUM: 900, LOW: 700 };
 
 const FACILITY_EMOJI: Record<string, string> = {
   fire_station: "🔥", hospital: "🏥", clinic: "🩺", police: "👮",
@@ -83,14 +69,17 @@ const HEATMAP_GRADIENT: Record<string, Record<number, string>> = {
   street_dogs: { 0.0: "#150800", 0.4: "#884400", 0.7: "#dd7700", 1.0: "#ffaa00" },
 };
 const HEATMAP_LAYERS = ["crime_ncrb", "traffic", "street_dogs"];
-const DOT_LAYERS = ["pothole", "garbage_dump", "crime", "drainage", "stp", "crashes"];
+const DOT_LAYERS = ["pothole", "garbage_dump", "crime", "drainage", "stp", "crashes", "weather_station", "bescom"];
 const DOT_COLORS: Record<string, { fill: string; stroke: string }> = {
-  pothole:     { fill: "#ff7700", stroke: "#cc4400" },
-  garbage_dump:{ fill: "#44dd44", stroke: "#229922" },
-  crime:       { fill: "#ff0033", stroke: "#aa0022" },
-  drainage:    { fill: "#0088ff", stroke: "#005599" },
-  stp:         { fill: "#00ccaa", stroke: "#009977" },
-  crashes:     { fill: "#ff2200", stroke: "#cc1100" },
+  pothole:         { fill: "#ff7700", stroke: "#cc4400" },
+  garbage_dump:    { fill: "#44dd44", stroke: "#229922" },
+  crime:           { fill: "#ff0033", stroke: "#aa0022" },
+  drainage:        { fill: "#0088ff", stroke: "#005599" },
+  stp:             { fill: "#00ccaa", stroke: "#009977" },
+  crashes:         { fill: "#ff2200", stroke: "#cc1100" },
+  tax_collection:  { fill: "#f5c518", stroke: "#b8860b" },
+  weather_station: { fill: "#00cfff", stroke: "#0088bb" },
+  bescom:          { fill: "#ff9500", stroke: "#cc6000" },
 };
 
 function loadLeafletHeat(): Promise<void> {
@@ -136,7 +125,7 @@ function loadMarkerCluster(): Promise<void> {
 }
 
 function MapViewInner({
-  activeLayers, layerData, floodFeatures, facilities, showFacilities,
+  activeLayers, layerData, facilities, showFacilities,
   onMapClick, simulationMode, simulationRadiusKm, simulationResult, onSimulate,
   geoJsonLayer,
 }: MapViewProps) {
@@ -145,7 +134,9 @@ function MapViewInner({
   const containerRef = useRef<HTMLDivElement>(null);
   const heatLayersRef = useRef<any[]>([]);
   const dotLayersRef = useRef<any[]>([]);
-  const floodLayersRef = useRef<any[]>([]);
+  const taxLayersRef = useRef<any[]>([]);
+  const aqiLayersRef = useRef<any[]>([]);
+  const populationLayersRef = useRef<any[]>([]);
   const facilityLayersRef = useRef<any[]>([]);
   const simLayersRef = useRef<any[]>([]);
   const geoJsonLayersRef = useRef<any[]>([]);
@@ -282,6 +273,7 @@ function MapViewInner({
         const clusterGroup = WL.markerClusterGroup({
           maxClusterRadius: 60,
           showCoverageOnHover: false,
+          spiderLegPolylineOptions: { color: colors.stroke, weight: 1.5, opacity: 0.8 },
           iconCreateFunction: (cluster: any) => {
             const count = cluster.getChildCount();
             const size = count >= 100 ? 46 : count >= 20 ? 38 : 30;
@@ -332,39 +324,107 @@ function MapViewInner({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layerData, activeLayers, mapInitialized]);
 
-  // ── Update Flood Circles ──
+  // ── Tax Collection Heatmap (ward circles) ──
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     let cancelled = false;
     (async () => {
-      floodLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
-      floodLayersRef.current = [];
-      if (!activeLayers.includes("flood") || floodFeatures.length === 0) return;
-
+      taxLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
+      taxLayersRef.current = [];
+      if (!activeLayers.includes("tax_collection")) return;
+      const points = layerData["tax_collection"] || [];
+      if (points.length === 0) return;
       const L = await import("leaflet");
       if (cancelled) return;
-
-      for (const feature of floodFeatures) {
-        const { name, risk } = feature.properties;
-        const [lng, lat] = feature.geometry.coordinates;
-        const colors = RISK_COLORS[risk] || RISK_COLORS.LOW;
-        const circle = L.circle([lat, lng], {
-          radius: RISK_RADIUS[risk] || 700, color: colors.border,
-          fillColor: colors.fill, fillOpacity: 0.55, weight: 1.5, opacity: 0.9,
-        }).bindTooltip(
-          `<div style="font-family:sans-serif;font-size:12px;font-weight:600">
-            ${name}<br/><span style="color:${colors.border}">${risk} FLOOD RISK</span><br/>
-            <small>Elevation: ${feature.properties.elevation_m}m | Drainage: ${feature.properties.drainage_score}/10</small>
-           </div>`,
-          { sticky: true, direction: "top", offset: [0, -10] }
-        );
+      for (const p of points) {
+        // Darker amber = higher collection
+        const g = Math.round(220 - p.intensity * 130);
+        const b = Math.round(50 - p.intensity * 50);
+        const fill = `rgb(255,${g},${b})`;
+        const circle = (L as any).circle([p.lat, p.lng], {
+          radius: 650,
+          color: fill,
+          fillColor: fill,
+          fillOpacity: 0.20 + p.intensity * 0.50,
+          weight: 1,
+          opacity: 0.75,
+        });
+        if (p.label) circle.bindTooltip(p.label, { sticky: true, direction: "top", offset: [0, -8] });
         circle.addTo(map);
-        floodLayersRef.current.push(circle);
+        taxLayersRef.current.push(circle);
       }
     })();
     return () => { cancelled = true; };
-  }, [floodFeatures, activeLayers]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layerData, activeLayers, mapInitialized]);
+
+  // ── AQI Station Circles ──
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    let cancelled = false;
+    (async () => {
+      aqiLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
+      aqiLayersRef.current = [];
+      if (!activeLayers.includes("aqi")) return;
+      const points = layerData["aqi"] || [];
+      if (points.length === 0) return;
+      const L = await import("leaflet");
+      if (cancelled) return;
+      for (const p of points) {
+        const fill = p.color || "#00e400";
+        const circle = (L as any).circle([p.lat, p.lng], {
+          radius: 1200,
+          color: fill,
+          fillColor: fill,
+          fillOpacity: 0.25 + p.intensity * 0.40,
+          weight: 2,
+          opacity: 0.85,
+        });
+        if (p.label) circle.bindTooltip(p.label, { sticky: true, direction: "top", offset: [0, -8] });
+        circle.addTo(map);
+        aqiLayersRef.current.push(circle);
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layerData, activeLayers, mapInitialized]);
+
+  // ── Population Density Circles ──
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    let cancelled = false;
+    (async () => {
+      populationLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
+      populationLayersRef.current = [];
+      if (!activeLayers.includes("population")) return;
+      const points = layerData["population"] || [];
+      if (points.length === 0) return;
+      const L = await import("leaflet");
+      if (cancelled) return;
+      for (const p of points) {
+        // Light blue → deep indigo as population increases
+        const r = Math.round(123 - p.intensity * 93);
+        const g = Math.round(156 - p.intensity * 136);
+        const fill = `rgb(${r},${g},255)`;
+        const circle = (L as any).circle([p.lat, p.lng], {
+          radius: 650,
+          color: fill,
+          fillColor: fill,
+          fillOpacity: 0.18 + p.intensity * 0.52,
+          weight: 1,
+          opacity: 0.75,
+        });
+        if (p.label) circle.bindTooltip(p.label, { sticky: true, direction: "top", offset: [0, -8] });
+        circle.addTo(map);
+        populationLayersRef.current.push(circle);
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layerData, activeLayers, mapInitialized]);
 
   // ── Update Facility Markers ──
   useEffect(() => {

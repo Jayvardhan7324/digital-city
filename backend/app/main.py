@@ -19,7 +19,7 @@ app.add_middleware(
 def read_root():
     return {"status": "ok", "message": "Smart City Backend is running."}
 
-from .routes import flood, traffic, emergency, heatmap, insights, reports, datasets, kml
+from .routes import flood, traffic, emergency, heatmap, insights, reports, datasets, kml, aqi
 
 app.include_router(flood.router)
 app.include_router(traffic.router)
@@ -29,5 +29,6 @@ app.include_router(insights.router)
 app.include_router(reports.router)
 app.include_router(datasets.router)
 app.include_router(kml.router)
+app.include_router(aqi.router)
 
 
