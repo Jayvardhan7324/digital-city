@@ -551,7 +551,7 @@ function MapViewInner({
   return (
     <div
       ref={containerRef}
-      style={{ position: "absolute", inset: 0, cursor, background: "#0d1117" }}
+      style={{ position: "absolute", inset: 0, zIndex: 0, cursor, background: "#0d1117" }}
     />
   );
 }

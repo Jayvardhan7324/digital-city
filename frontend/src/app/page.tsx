@@ -636,7 +636,7 @@ export default function HomePage() {
 
         {/* Crime source selector */}
         {activeLayers.includes("crime") && (
-          <div className="absolute top-3 left-3 z-10 glass-panel px-3 py-2 flex gap-2 animate-fade-in">
+          <div className="absolute top-3 left-3 z-[1100] glass-panel px-3 py-2 flex gap-2 animate-fade-in">
             {CRIME_SOURCES.map(s => (
               <button key={s.id} onClick={() => handleCrimeSourceChange(s.id as "crime" | "crime_ncrb")}
                 className={`text-[10px] px-2 py-1 rounded transition-all ${crimeSource === s.id ? "bg-white/15 text-white" : "text-white/35 hover:text-white/60"}`}>
@@ -647,12 +647,12 @@ export default function HomePage() {
         )}
 
         {/* Dataset selector */}
-        <div className={`absolute z-10 ${activeLayers.includes("crime") ? "top-14" : "top-3"} left-3`}>
+        <div className={`absolute z-[1100] ${activeLayers.includes("crime") ? "top-14" : "top-3"} left-3`}>
           <DatasetSelector onSelect={fetchDataset} selected={selectedDataset} />
         </div>
 
         {/* Map toolbar — top right */}
-        <div className="absolute top-3 right-3 z-10 flex gap-1.5">
+        <div className="absolute top-3 right-3 z-[1100] flex gap-1.5">
           <button onClick={() => setShowLegend(v => !v)}
             title="Legend"
             className={`glass-panel p-2 transition-all hover:bg-white/10 ${showLegend ? "bg-white/10" : ""}`}>
@@ -667,21 +667,21 @@ export default function HomePage() {
 
         {/* Legend */}
         {showLegend && (
-          <div className="absolute top-14 right-3 z-10">
+          <div className="absolute top-14 right-3 z-[1100]">
             <LegendPanel activeLayers={activeLayers} onClose={() => setShowLegend(false)} />
           </div>
         )}
 
         {/* Alert panel */}
         {showAlerts && (
-          <div className="absolute top-14 right-3 z-10 w-72 h-96">
+          <div className="absolute top-14 right-3 z-[1100] w-72 h-96">
             <AlertPanel onClose={() => setShowAlerts(false)} />
           </div>
         )}
 
         {/* Simulation result overlay */}
         {simulationResult && (
-          <div className="absolute bottom-3 left-3 z-10 w-72 glass-panel p-3 animate-fade-in-up">
+          <div className="absolute bottom-3 left-3 z-[1100] w-72 glass-panel p-3 animate-fade-in-up">
             <div className="flex items-center justify-between mb-2">
               <span className="text-white/60 text-[10px] uppercase tracking-widest font-medium">Simulation Result</span>
               <button onClick={clearSimulation} className="text-white/30 hover:text-white/70">
@@ -703,7 +703,7 @@ export default function HomePage() {
 
         {/* Active layer badges */}
         {activeLayers.length > 0 && (
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex flex-wrap gap-1.5 justify-center pointer-events-none">
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1100] flex flex-wrap gap-1.5 justify-center pointer-events-none">
             {activeLayers.slice(0, 5).map(id => {
               const l = LAYERS.find(x => x.id === id);
               return l ? (
