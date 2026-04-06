@@ -34,5 +34,8 @@ frontend/.env.local
 .DS_Store
 Thumbs.db
 
+# SQLite databases
+*.db
+
 # Claude
 .claude/settings.local.json

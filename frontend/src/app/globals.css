@@ -40,8 +40,8 @@
   --radius-xl: calc(var(--radius) * 1.4);
 }
 
-/* ── Pure black / white token system ── */
-:root {
+/* ── Dark theme (default) ── */
+:root, .dark {
   --background:         #000000;
   --foreground:         #ffffff;
   --card:               #0a0a0a;
@@ -70,6 +70,46 @@
   --sidebar-border:     rgba(255,255,255,0.06);
   --sidebar-ring:       rgba(255,255,255,0.15);
 }
+
+/* ── Light theme ── */
+.light {
+  --background:         #f0f2f5;
+  --foreground:         #0a0a0a;
+  --card:               #ffffff;
+  --card-foreground:    #0a0a0a;
+  --popover:            #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary:            #0a0a0a;
+  --primary-foreground: #ffffff;
+  --secondary:          #e8eaed;
+  --secondary-foreground: #555555;
+  --muted:              #e8eaed;
+  --muted-foreground:   #888888;
+  --accent:             #dde1e7;
+  --accent-foreground:  #0a0a0a;
+  --destructive:        #dc2626;
+  --border:             rgba(0,0,0,0.10);
+  --input:              rgba(0,0,0,0.06);
+  --ring:               rgba(0,0,0,0.20);
+  --sidebar:            #ffffff;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary:    #0a0a0a;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent:     #e8eaed;
+  --sidebar-accent-foreground: #555555;
+  --sidebar-border:     rgba(0,0,0,0.08);
+  --sidebar-ring:       rgba(0,0,0,0.15);
+}
+
+.light body { background: #f0f2f5; color: #0a0a0a; }
+.light .glass-panel {
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(0,0,0,0.09);
+}
+.light .panel-divider { border-top: 1px solid rgba(0,0,0,0.06); }
+.light ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); }
+.light input[type="range"] { background: rgba(0,0,0,0.12); }
+.light input[type="range"]::-webkit-slider-thumb { background: #0a0a0a; }
 
 @layer base {
   * {

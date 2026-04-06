@@ -3,33 +3,22 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
-export interface HeatPoint { lat: number; lng: number; intensity: number; label?: string; color?: string; }
-
+export interface HeatPoint { lat: number; lng: number; intensity: number; label?: string; color?: string; line?: string; line_color?: string; status?: string; school_type?: string; }
 export interface Facility {
   type: string;
   properties: { id: string; name: string; facility_type: string; amenity?: string; phone?: string; operator?: string; };
   geometry: { type: string; coordinates: [number, number]; };
 }
-
 export interface SimulationResponder {
   type: "fire" | "hospital" | "police";
-  name: string;
-  facility_lat: number;
-  facility_lng: number;
-  distance_km: number;
-  eta_minutes: number;
-  status: string;
-  delay_warning: string;
+  name: string; facility_lat: number; facility_lng: number;
+  distance_km: number; eta_minutes: number; status: string; delay_warning: string;
 }
-
 export interface SimulationResult {
   mode: "rain" | "crime";
   incident: { lat: number; lng: number };
-  radius_km: number;
-  responders: SimulationResponder[];
-  summary: string;
+  radius_km: number; responders: SimulationResponder[]; summary: string;
 }
-
 export interface GeoFeature {
   geometry: { type: string; coordinates: any };
   properties: Record<string, any>;
@@ -38,6 +27,7 @@ export interface GeoFeature {
 interface MapViewProps {
   activeLayers: string[];
   layerData: Record<string, HeatPoint[]>;
+  layerIntensity?: Record<string, number>;
   facilities: Facility[];
   showFacilities: boolean;
   onMapClick: (lat: number, lng: number) => void;
@@ -46,13 +36,15 @@ interface MapViewProps {
   simulationResult: SimulationResult | null;
   onSimulate: (lat: number, lng: number) => void;
   geoJsonLayer?: { id: string; features: GeoFeature[] } | null;
+  jumpToLocation?: [number, number] | null;
 }
+
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const FACILITY_EMOJI: Record<string, string> = {
   fire_station: "🔥", hospital: "🏥", clinic: "🩺", police: "👮",
   ambulance_station: "🚑", pharmacy: "💊", school: "🏫", college: "🎓",
 };
-
 const RESPONDER_COLOR: Record<string, string> = {
   fire: "#ff4444", hospital: "#44aaff", police: "#aa44ff",
 };
@@ -64,12 +56,14 @@ const HEATMAP_GRADIENT: Record<string, Record<number, string>> = {
   crime:       { 0.0: "#000023", 0.4: "#3b00c5", 0.7: "#c5003b", 1.0: "#ff0000" },
   crime_ncrb:  { 0.0: "#0a0015", 0.3: "#6600aa", 0.65: "#dd0044", 1.0: "#ff2222" },
   traffic:     { 0.0: "#201500", 0.4: "#aa6600", 0.7: "#ffaa00", 1.0: "#ffff00" },
-  pothole:     { 0.0: "#150a00", 0.4: "#883300", 0.7: "#cc6600", 1.0: "#ff9900" },
-  drainage:    { 0.0: "#000a20", 0.4: "#003388", 0.7: "#0077ff", 1.0: "#00ccff" },
   street_dogs: { 0.0: "#150800", 0.4: "#884400", 0.7: "#dd7700", 1.0: "#ffaa00" },
+  trees:       { 0.0: "#001a00", 0.3: "#0a4d0a", 0.6: "#1a9e1a", 1.0: "#44ff44" },
+  rainfall:    { 0.0: "#000a2a", 0.3: "#003399", 0.6: "#0066ff", 1.0: "#00ccff" },
+  noise:       { 0.0: "#1a0000", 0.3: "#8b0000", 0.65: "#ff4500", 1.0: "#ff0000" },
 };
-const HEATMAP_LAYERS = ["crime_ncrb", "traffic", "street_dogs"];
-const DOT_LAYERS = ["pothole", "garbage_dump", "crime", "drainage", "stp", "crashes", "weather_station", "bescom"];
+
+const HEATMAP_LAYERS = ["crime_ncrb", "traffic", "street_dogs", "trees", "rainfall"];
+
 const DOT_COLORS: Record<string, { fill: string; stroke: string }> = {
   pothole:         { fill: "#ff7700", stroke: "#cc4400" },
   garbage_dump:    { fill: "#44dd44", stroke: "#229922" },
@@ -80,13 +74,25 @@ const DOT_COLORS: Record<string, { fill: string; stroke: string }> = {
   tax_collection:  { fill: "#f5c518", stroke: "#b8860b" },
   weather_station: { fill: "#00cfff", stroke: "#0088bb" },
   bescom:          { fill: "#ff9500", stroke: "#cc6000" },
+  bmtc:            { fill: "#1976d2", stroke: "#0d47a1" },
+  schools:         { fill: "#7c4dff", stroke: "#512da8" },
+  construction:    { fill: "#ff6f00", stroke: "#e65100" },
+  water_quality:   { fill: "#00bcd4", stroke: "#0097a7" },
+  streetlights:    { fill: "#ffd600", stroke: "#f9a825" },
+  noise:           { fill: "#f44336", stroke: "#c62828" },
 };
+
+const DOT_LAYERS = [
+  "pothole", "garbage_dump", "crime", "drainage", "stp", "crashes",
+  "weather_station", "bescom", "bmtc", "schools", "construction",
+  "water_quality", "streetlights",
+];
+
+// ── Loader helpers ────────────────────────────────────────────────────────────
 
 function loadLeafletHeat(): Promise<void> {
   return new Promise((resolve) => {
-    if ((window as any).leafletHeatLoaded && (window as any).L?.heatLayer) {
-      resolve(); return;
-    }
+    if ((window as any).leafletHeatLoaded && (window as any).L?.heatLayer) { resolve(); return; }
     (window as any).leafletHeatLoaded = false;
     const old = document.querySelector('script[src="/leaflet-heat.js"]');
     if (old) old.remove();
@@ -102,8 +108,7 @@ function loadMarkerCluster(): Promise<void> {
   return new Promise((resolve) => {
     if ((window as any).L?.markerClusterGroup) { resolve(); return; }
     if (!document.querySelector('link[href*="MarkerCluster.css"]')) {
-      ["https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css",
-      ].forEach((href) => {
+      ["https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"].forEach((href) => {
         const link = document.createElement("link");
         link.rel = "stylesheet"; link.href = href;
         document.head.appendChild(link);
@@ -118,481 +123,436 @@ function loadMarkerCluster(): Promise<void> {
     }
     const script = document.createElement("script");
     script.src = "https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js";
-    script.onload = () => resolve();
+    script.onload = () => {
+      const poll = setInterval(() => {
+        if ((window as any).L?.markerClusterGroup) { clearInterval(poll); resolve(); }
+      }, 50);
+    };
     script.onerror = () => resolve();
     document.head.appendChild(script);
   });
 }
 
+// ── Main Component ────────────────────────────────────────────────────────────
+
 function MapViewInner({
-  activeLayers, layerData, facilities, showFacilities,
-  onMapClick, simulationMode, simulationRadiusKm, simulationResult, onSimulate,
-  geoJsonLayer,
+  activeLayers, layerData, layerIntensity = {},
+  facilities, showFacilities, onMapClick,
+  simulationMode, simulationRadiusKm, simulationResult, onSimulate,
+  geoJsonLayer, jumpToLocation,
 }: MapViewProps) {
-  const [mapInitialized, setMapInitialized] = useState(false);
-  const mapRef = useRef<any>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const heatLayersRef = useRef<any[]>([]);
-  const dotLayersRef = useRef<any[]>([]);
-  const taxLayersRef = useRef<any[]>([]);
-  const aqiLayersRef = useRef<any[]>([]);
-  const populationLayersRef = useRef<any[]>([]);
-  const facilityLayersRef = useRef<any[]>([]);
-  const simLayersRef = useRef<any[]>([]);
-  const geoJsonLayersRef = useRef<any[]>([]);
-  const simModeRef = useRef(simulationMode);
-  const simRadiusRef = useRef(simulationRadiusKm);
-  const onSimulateRef = useRef(onSimulate);
-  const onMapClickRef = useRef(onMapClick);
+  const containerRef   = useRef<HTMLDivElement>(null);
+  const mapRef         = useRef<any>(null);
+  const heatLayersRef  = useRef<Record<string, any>>({});
+  const dotLayersRef   = useRef<Record<string, any>>({});
+  const taxLayersRef   = useRef<any[]>([]);
+  const aqiLayersRef   = useRef<any[]>([]);
+  const populationRef  = useRef<any[]>([]);
+  const metroLayersRef = useRef<any[]>([]);
+  const facilityRef    = useRef<any[]>([]);
+  const simLayersRef   = useRef<any[]>([]);
+  const geoJsonRef     = useRef<any>(null);
+
+  // Stable refs for callbacks
+  const simModeRef     = useRef(simulationMode);
+  const simRadiusRef   = useRef(simulationRadiusKm);
+  const onSimulateRef  = useRef(onSimulate);
+  const onMapClickRef  = useRef(onMapClick);
 
   useEffect(() => { simModeRef.current = simulationMode; }, [simulationMode]);
   useEffect(() => { simRadiusRef.current = simulationRadiusKm; }, [simulationRadiusKm]);
   useEffect(() => { onSimulateRef.current = onSimulate; }, [onSimulate]);
   useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
 
-  // ── Initialize Map ──
+  // ── Map init ───────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!containerRef.current) return;
-    const container = containerRef.current as any;
-    if (container._leaflet_id) delete container._leaflet_id;
-    if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
+    if (!containerRef.current || mapRef.current) return;
+    const L = require("leaflet");
+    (window as any).L = Object.assign({}, L);
 
-    let cancelled = false;
-    (async () => {
-      const L = await import("leaflet");
-      if (cancelled) return;
+    const map = L.map(containerRef.current, {
+      center: [12.9716, 77.5946],
+      zoom: 12,
+      zoomControl: false,
+      attributionControl: false,
+      preferCanvas: true,
+    });
 
-      // ES module namespaces are frozen; create a mutable copy so CDN plugins can extend it
-      (window as any).L = Object.assign({}, L);
-      await loadLeafletHeat();
-      if (cancelled) return;
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "© OpenStreetMap",
+    }).addTo(map);
 
-      if (!document.querySelector('link[href*="leaflet@1.9.4"]')) {
-        const link = document.createElement("link");
-        link.rel = "stylesheet";
-        link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-        document.head.appendChild(link);
+    L.control.zoom({ position: "bottomleft" }).addTo(map);
+    L.control.attribution({ position: "bottomright", prefix: "" }).addTo(map);
+
+    map.on("click", (e: any) => {
+      const { lat, lng } = e.latlng;
+      if (simModeRef.current !== "none") {
+        onSimulateRef.current(lat, lng);
+      } else {
+        onMapClickRef.current(lat, lng);
       }
+    });
 
-      delete (L.Icon.Default.prototype as any)._getIconUrl;
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-        iconUrl:       "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-        shadowUrl:     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-      });
+    mapRef.current = map;
 
-      if (cancelled || !containerRef.current) return;
+    // Fix partial tile load: invalidate once layout settles
+    setTimeout(() => map.invalidateSize(), 150);
 
-      const map = L.map(containerRef.current, {
-        center: [12.9716, 77.5946], zoom: 12,
-        zoomControl: false, attributionControl: false,
-      });
-
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19, attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
-      }).addTo(map);
-      L.control.attribution({ position: "bottomright", prefix: false }).addTo(map);
-      L.control.zoom({ position: "bottomleft" }).addTo(map);
-
-      map.on("click", (e: any) => {
-        const { lat, lng } = e.latlng;
-        if (simModeRef.current !== "none") {
-          onSimulateRef.current(lat, lng);
-        } else {
-          onMapClickRef.current(lat, lng);
-        }
-      });
-
-      mapRef.current = map;
-      setMapInitialized(true);
-    })();
+    // Re-invalidate whenever the container is resized (sidebar open/close etc.)
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    if (containerRef.current) ro.observe(containerRef.current);
 
     return () => {
-      cancelled = true;
-      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
+      ro.disconnect();
+      map.remove();
+      mapRef.current = null;
     };
   }, []);
 
-  // ── Update Heatmap Layers ──
+  // ── Jump to geocoder result ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapRef.current || !jumpToLocation) return;
+    mapRef.current.setView(jumpToLocation, 15, { animate: true });
+  }, [jumpToLocation]);
+
+  // ── Heatmap layers ─────────────────────────────────────────────────────────
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    let cancelled = false;
-    (async () => {
-      heatLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
-      heatLayersRef.current = [];
 
-      const activeHeatLayers = HEATMAP_LAYERS.filter((l) => activeLayers.includes(l));
-      if (activeHeatLayers.length === 0) return;
-
+    HEATMAP_LAYERS.forEach(async (layerId) => {
+      if (heatLayersRef.current[layerId]) {
+        map.removeLayer(heatLayersRef.current[layerId]);
+        delete heatLayersRef.current[layerId];
+      }
+      const pts = layerData[layerId];
+      if (!activeLayers.includes(layerId) || !pts?.length) return;
       await loadLeafletHeat();
-      if (cancelled) return;
-
       const L = (window as any).L;
       if (!L?.heatLayer) return;
+      const intensity = layerIntensity[layerId] ?? 1.0;
+      const points = pts.map(p => [p.lat, p.lng, (p.intensity ?? 0.5) * intensity]);
+      const heat = L.heatLayer(points, {
+        radius: 30, blur: 22, maxZoom: 15, max: 1.0,
+        minOpacity: 0.3 * intensity,
+        gradient: HEATMAP_GRADIENT[layerId] ?? HEATMAP_GRADIENT.traffic,
+      }).addTo(map);
+      heatLayersRef.current[layerId] = heat;
+    });
+  }, [activeLayers, layerData, layerIntensity]);
 
-      for (const layerId of activeHeatLayers) {
-        const points = layerData[layerId] || [];
-        if (points.length === 0) continue;
-        const gradient = HEATMAP_GRADIENT[layerId] || HEATMAP_GRADIENT.crime;
-        const latlngs = points.map((p) => [p.lat, p.lng, p.intensity]);
-        const heat = L.heatLayer(latlngs, { radius: 30, blur: 22, maxZoom: 15, max: 1.0, gradient, minOpacity: 0.4 });
-        heat.addTo(map);
-        heatLayersRef.current.push(heat);
-      }
-    })();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layerData, activeLayers, mapInitialized]);
-
-  // ── Update Dot Markers with Clustering ──
+  // ── Dot / cluster layers ───────────────────────────────────────────────────
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    let cancelled = false;
-    (async () => {
-      dotLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
-      dotLayersRef.current = [];
 
-      const activeDotLayers = DOT_LAYERS.filter((l) => activeLayers.includes(l));
-      if (activeDotLayers.length === 0) return;
-
-      const L = await import("leaflet");
+    DOT_LAYERS.forEach(async (layerId) => {
+      if (dotLayersRef.current[layerId]) {
+        map.removeLayer(dotLayersRef.current[layerId]);
+        delete dotLayersRef.current[layerId];
+      }
+      const pts = layerData[layerId];
+      if (!activeLayers.includes(layerId) || !pts?.length) return;
       await loadMarkerCluster();
-      if (cancelled) return;
+      const L = (window as any).L;
+      if (!L?.markerClusterGroup) return;
 
-      const WL = (window as any).L;
-      if (!WL?.markerClusterGroup) return;
+      const intensity = layerIntensity[layerId] ?? 1.0;
+      const color = DOT_COLORS[layerId] ?? { fill: "#ffffff", stroke: "#888888" };
 
-      for (const activeDotLayer of activeDotLayers) {
-        const points = layerData[activeDotLayer] || [];
-        if (points.length === 0) continue;
-
-        const colors = DOT_COLORS[activeDotLayer];
-
-        const clusterGroup = WL.markerClusterGroup({
-          maxClusterRadius: 60,
-          showCoverageOnHover: false,
-          spiderLegPolylineOptions: { color: colors.stroke, weight: 1.5, opacity: 0.8 },
-          iconCreateFunction: (cluster: any) => {
-            const count = cluster.getChildCount();
-            const size = count >= 100 ? 46 : count >= 20 ? 38 : 30;
-            return WL.divIcon({
-              className: "",
-              html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
-                background:${colors.fill};border:2px solid ${colors.stroke};
-                display:flex;align-items:center;justify-content:center;
-                color:#fff;font-size:${size >= 38 ? 13 : 11}px;font-weight:700;
-                box-shadow:0 2px 10px rgba(0,0,0,0.55)">${count}</div>`,
-              iconSize: [size, size], iconAnchor: [size / 2, size / 2],
-            });
-          },
-        });
-
-        for (const p of points) {
-          let marker: any;
-          if (activeDotLayer === "stp") {
-            const icon = L.divIcon({
-              className: "",
-              html: `<div style="width:18px;height:18px;border-radius:3px;
-                background:${colors.fill};border:2px solid ${colors.stroke};
-                display:flex;align-items:center;justify-content:center;
-                font-size:11px;box-shadow:0 1px 4px rgba(0,0,0,0.5)">🏭</div>`,
-              iconSize: [18, 18], iconAnchor: [9, 9],
-            });
-            marker = L.marker([p.lat, p.lng], { icon });
-          } else {
-            const size = 8 + Math.round(p.intensity * 6);
-            const icon = L.divIcon({
-              className: "",
-              html: `<div style="width:${size}px;height:${size}px;border-radius:50%;
-                background:${colors.fill};border:1.5px solid ${colors.stroke};
-                box-shadow:0 1px 4px rgba(0,0,0,0.5);opacity:0.9"></div>`,
-              iconSize: [size, size],
-              iconAnchor: [size / 2, size / 2],
-            });
-            marker = L.marker([p.lat, p.lng], { icon });
-          }
-          clusterGroup.addLayer(marker);
-        }
-
-        clusterGroup.addTo(map);
-        dotLayersRef.current.push(clusterGroup);
-      }
-    })();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layerData, activeLayers, mapInitialized]);
-
-  // ── Tax Collection Heatmap (ward circles) ──
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    let cancelled = false;
-    (async () => {
-      taxLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
-      taxLayersRef.current = [];
-      if (!activeLayers.includes("tax_collection")) return;
-      const points = layerData["tax_collection"] || [];
-      if (points.length === 0) return;
-      const L = await import("leaflet");
-      if (cancelled) return;
-      for (const p of points) {
-        // Darker amber = higher collection
-        const g = Math.round(220 - p.intensity * 130);
-        const b = Math.round(50 - p.intensity * 50);
-        const fill = `rgb(255,${g},${b})`;
-        const circle = (L as any).circle([p.lat, p.lng], {
-          radius: 650,
-          color: fill,
-          fillColor: fill,
-          fillOpacity: 0.20 + p.intensity * 0.50,
-          weight: 1,
-          opacity: 0.75,
-        });
-        if (p.label) circle.bindTooltip(p.label, { sticky: true, direction: "top", offset: [0, -8] });
-        circle.addTo(map);
-        taxLayersRef.current.push(circle);
-      }
-    })();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layerData, activeLayers, mapInitialized]);
-
-  // ── AQI Station Circles ──
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    let cancelled = false;
-    (async () => {
-      aqiLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
-      aqiLayersRef.current = [];
-      if (!activeLayers.includes("aqi")) return;
-      const points = layerData["aqi"] || [];
-      if (points.length === 0) return;
-      const L = await import("leaflet");
-      if (cancelled) return;
-      for (const p of points) {
-        const fill = p.color || "#00e400";
-        const circle = (L as any).circle([p.lat, p.lng], {
-          radius: 1200,
-          color: fill,
-          fillColor: fill,
-          fillOpacity: 0.25 + p.intensity * 0.40,
-          weight: 2,
-          opacity: 0.85,
-        });
-        if (p.label) circle.bindTooltip(p.label, { sticky: true, direction: "top", offset: [0, -8] });
-        circle.addTo(map);
-        aqiLayersRef.current.push(circle);
-      }
-    })();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layerData, activeLayers, mapInitialized]);
-
-  // ── Population Density Circles ──
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    let cancelled = false;
-    (async () => {
-      populationLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
-      populationLayersRef.current = [];
-      if (!activeLayers.includes("population")) return;
-      const points = layerData["population"] || [];
-      if (points.length === 0) return;
-      const L = await import("leaflet");
-      if (cancelled) return;
-      for (const p of points) {
-        // Light blue → deep indigo as population increases
-        const r = Math.round(123 - p.intensity * 93);
-        const g = Math.round(156 - p.intensity * 136);
-        const fill = `rgb(${r},${g},255)`;
-        const circle = (L as any).circle([p.lat, p.lng], {
-          radius: 650,
-          color: fill,
-          fillColor: fill,
-          fillOpacity: 0.18 + p.intensity * 0.52,
-          weight: 1,
-          opacity: 0.75,
-        });
-        if (p.label) circle.bindTooltip(p.label, { sticky: true, direction: "top", offset: [0, -8] });
-        circle.addTo(map);
-        populationLayersRef.current.push(circle);
-      }
-    })();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layerData, activeLayers, mapInitialized]);
-
-  // ── Update Facility Markers ──
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    let cancelled = false;
-    (async () => {
-      facilityLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
-      facilityLayersRef.current = [];
-      if (!showFacilities || facilities.length === 0) return;
-
-      const L = await import("leaflet");
-      if (cancelled) return;
-
-      for (const f of facilities) {
-        const [lng, lat] = f.geometry.coordinates;
-        const emoji = FACILITY_EMOJI[f.properties.facility_type] || "📍";
-        const icon = L.divIcon({
-          className: "",
-          html: `<div style="background:rgba(10,18,40,0.88);border:1px solid rgba(100,160,255,0.5);
-            border-radius:50%;width:14px;height:14px;display:flex;align-items:center;
-            justify-content:center;font-size:8px;box-shadow:0 1px 4px rgba(0,0,0,0.5)">${emoji}</div>`,
-          iconSize: [14, 14], iconAnchor: [7, 7],
-        });
-        const phone = f.properties.phone ? `<br/>📞 ${f.properties.phone}` : "";
-        const op = f.properties.operator ? `<br/>🏢 ${f.properties.operator}` : "";
-        const marker = L.marker([lat, lng], { icon }).bindTooltip(
-          `<div style="font-family:sans-serif;font-size:11px;min-width:140px">
-            <strong>${f.properties.name}</strong><br/>
-            <span style="text-transform:capitalize;color:#88aaff">${f.properties.facility_type.replace(/_/g, " ")}</span>
-            ${phone}${op}
-           </div>`,
-          { direction: "top", offset: [0, -7] }
-        );
-        marker.addTo(map);
-        facilityLayersRef.current.push(marker);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [facilities, showFacilities]);
-
-  // ── Simulation Overlay ──
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    let cancelled = false;
-    (async () => {
-      simLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
-      simLayersRef.current = [];
-      if (!simulationResult) return;
-
-      const L = await import("leaflet");
-      if (cancelled) return;
-
-      const { incident, radius_km, responders, mode } = simulationResult;
-
-      const incidentIcon = L.divIcon({
-        className: "",
-        html: `<div style="width:18px;height:18px;border-radius:50%;background:${mode === "rain" ? "#4488ff" : "#ff4444"};
-          border:3px solid white;box-shadow:0 0 12px ${mode === "rain" ? "#4488ff" : "#ff4444"},0 0 4px rgba(0,0,0,0.8)"></div>`,
-        iconSize: [18, 18], iconAnchor: [9, 9],
+      const cluster = L.markerClusterGroup({
+        maxClusterRadius: 45,
+        iconCreateFunction: (c: any) => {
+          const n = c.getChildCount();
+          const sz = n > 100 ? 30 : n > 20 ? 24 : 18;
+          return L.divIcon({
+            html: `<div style="width:${sz}px;height:${sz}px;border-radius:50%;
+                   background:${color.fill}33;border:1.5px solid ${color.fill}88;
+                   display:flex;align-items:center;justify-content:center;
+                   font-size:${sz < 24 ? 9 : 10}px;font-weight:600;color:${color.fill};
+                   backdrop-filter:blur(4px)">${n}</div>`,
+            className: "", iconSize: [sz, sz],
+          });
+        },
+        spiderfyDistanceMultiplier: 2,
       });
-      const incidentMarker = L.marker([incident.lat, incident.lng], { icon: incidentIcon })
-        .bindTooltip(`<strong>${mode === "rain" ? "Rain Simulation Centre" : "Crime Incident"}</strong>`,
-          { permanent: false, direction: "top" });
-      incidentMarker.addTo(map);
-      simLayersRef.current.push(incidentMarker);
 
-      if (mode === "rain" && radius_km) {
-        const circle = L.circle([incident.lat, incident.lng], {
-          radius: radius_km * 1000,
-          color: "#4488ff", fillColor: "#4488ff", fillOpacity: 0.10,
-          weight: 2, dashArray: "6 4",
-        });
-        circle.addTo(map);
-        simLayersRef.current.push(circle);
+      for (const p of pts) {
+        const r = 8 + (p.intensity ?? 0.5) * 6;
+        // Street light: color by status
+        let fillColor = color.fill;
+        let strokeColor = color.stroke;
+        if (layerId === "streetlights" && p.status) {
+          fillColor = p.status === "faulty" ? "#ef4444" : p.status === "dim" ? "#f59e0b" : "#22c55e";
+          strokeColor = p.status === "faulty" ? "#991b1b" : p.status === "dim" ? "#92400e" : "#14532d";
+        }
+        // Water quality: color by intensity (high intensity = bad quality)
+        if (layerId === "water_quality") {
+          const q = 1.0 - (p.intensity ?? 0.5);
+          if (q >= 0.85) fillColor = "#06b6d4";
+          else if (q >= 0.70) fillColor = "#3b82f6";
+          else if (q >= 0.50) fillColor = "#f59e0b";
+          else fillColor = "#ef4444";
+        }
+        const icon = layerId === "stp"
+          ? L.divIcon({
+              html: `<div style="width:18px;height:18px;background:${fillColor}22;
+                     border:1px solid ${fillColor}88;display:flex;align-items:center;
+                     justify-content:center;font-size:10px;border-radius:3px">🏭</div>`,
+              className: "", iconSize: [18, 18],
+            })
+          : layerId === "bmtc"
+          ? L.divIcon({
+              html: `<div style="width:16px;height:16px;background:#1976d222;
+                     border:1.5px solid #1976d2;border-radius:3px;display:flex;
+                     align-items:center;justify-content:center;font-size:9px">🚌</div>`,
+              className: "", iconSize: [16, 16],
+            })
+          : L.divIcon({
+              html: `<div style="width:${r}px;height:${r}px;border-radius:50%;
+                     background:${fillColor}${Math.round(40 + (p.intensity ?? 0.5) * 140).toString(16).padStart(2,"0")};
+                     border:1.5px solid ${strokeColor};opacity:${0.5 + (p.intensity ?? 0.5) * 0.5 * intensity}">
+                     </div>`,
+              className: "", iconSize: [r, r], iconAnchor: [r / 2, r / 2],
+            });
+
+        const marker = L.marker([p.lat, p.lng], { icon });
+        if (p.label) marker.bindTooltip(p.label, { direction: "top", offset: [0, -r / 2] });
+        cluster.addLayer(marker);
       }
 
-      for (const r of responders) {
-        const color = RESPONDER_COLOR[r.type] || "#ffffff";
-        const emoji = RESPONDER_EMOJI[r.type] || "📍";
-        const isDelayed = r.status === "UNDER-SERVED";
+      cluster.addTo(map);
+      dotLayersRef.current[layerId] = cluster;
+    });
+  }, [activeLayers, layerData, layerIntensity]);
 
-        const line = L.polyline(
-          [[r.facility_lat, r.facility_lng], [incident.lat, incident.lng]],
-          { color, weight: 2.5, opacity: 0.85, dashArray: isDelayed ? "4 6" : "8 4" }
-        );
-        line.addTo(map);
-        simLayersRef.current.push(line);
+  // ── Metro stations (special: line-colored markers) ─────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    metroLayersRef.current.forEach(l => map.removeLayer(l));
+    metroLayersRef.current = [];
 
-        const respIcon = L.divIcon({
-          className: "",
-          html: `<div style="background:${color}22;border:2px solid ${color};border-radius:6px;
-            width:30px;height:30px;display:flex;align-items:center;justify-content:center;
-            font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,0.6)">${emoji}</div>`,
-          iconSize: [30, 30], iconAnchor: [15, 15],
-        });
-        const respMarker = L.marker([r.facility_lat, r.facility_lng], { icon: respIcon })
-          .bindTooltip(
-            `<div style="font-family:sans-serif;font-size:11px;min-width:160px">
-              <strong>${emoji} ${r.name}</strong><br/>
-              <span style="color:${color};text-transform:capitalize">${r.type}</span><br/>
-              📏 ${r.distance_km} km &nbsp; ⏱ <strong>${r.eta_minutes} min</strong><br/>
-              <span style="color:${isDelayed ? "#ff8888" : "#88ff88"}">${r.delay_warning}</span>
-             </div>`,
-            { direction: "top", offset: [0, -15] }
-          );
-        respMarker.addTo(map);
-        simLayersRef.current.push(respMarker);
-      }
+    const pts = layerData["metro"];
+    if (!activeLayers.includes("metro") || !pts?.length) return;
+    const L = require("leaflet");
+    const intensity = layerIntensity["metro"] ?? 1.0;
 
-      map.setView([incident.lat, incident.lng], Math.max(map.getZoom(), 13), { animate: true });
-    })();
-    return () => { cancelled = true; };
+    for (const p of pts) {
+      const lineColor = p.line_color ?? "#9c27b0";
+      const icon = L.divIcon({
+        html: `<div style="width:20px;height:20px;border-radius:50%;
+               background:${lineColor}33;border:2px solid ${lineColor};
+               display:flex;align-items:center;justify-content:center;
+               font-size:11px;opacity:${intensity}">🚇</div>`,
+        className: "", iconSize: [20, 20], iconAnchor: [10, 10],
+      });
+      const marker = L.marker([p.lat, p.lng], { icon });
+      if (p.label) marker.bindTooltip(p.label, { direction: "top" });
+      marker.addTo(map);
+      metroLayersRef.current.push(marker);
+    }
+  }, [activeLayers, layerData, layerIntensity]);
+
+  // ── Tax Collection (ward circles) ─────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    taxLayersRef.current.forEach(l => map.removeLayer(l));
+    taxLayersRef.current = [];
+
+    const pts = layerData["tax_collection"];
+    if (!activeLayers.includes("tax_collection") || !pts?.length) return;
+    const L = require("leaflet");
+    const intensity = layerIntensity["tax_collection"] ?? 1.0;
+
+    for (const p of pts) {
+      const v = (p.intensity ?? 0.5) * intensity;
+      const r = Math.round(20 + v * 60);
+      const g = Math.round(5 + v * 10);
+      const a = Math.round(0x66 + v * 0x66);
+      const circle = L.circle([p.lat, p.lng], {
+        radius: 650,
+        color: `rgb(${r}%,${g}%,0%)`,
+        fillColor: `rgb(${r}%,${g}%,0%)`,
+        fillOpacity: 0.18 + v * 0.25,
+        weight: 1.5,
+        opacity: 0.5 + v * 0.4,
+      });
+      if (p.label) circle.bindTooltip(p.label, { sticky: true });
+      circle.addTo(map);
+      taxLayersRef.current.push(circle);
+    }
+  }, [activeLayers, layerData, layerIntensity]);
+
+  // ── AQI Station circles ────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    aqiLayersRef.current.forEach(l => map.removeLayer(l));
+    aqiLayersRef.current = [];
+
+    const pts = layerData["aqi"];
+    if (!activeLayers.includes("aqi") || !pts?.length) return;
+    const L = require("leaflet");
+    const intensity = layerIntensity["aqi"] ?? 1.0;
+
+    for (const p of pts) {
+      const col = p.color ?? "#aaaaaa";
+      const circle = L.circle([p.lat, p.lng], {
+        radius: 1200,
+        color: col, fillColor: col,
+        fillOpacity: (0.25 + (p.intensity ?? 0.5) * 0.40) * intensity,
+        weight: 1.5, opacity: 0.6 * intensity,
+      });
+      if (p.label) circle.bindTooltip(p.label, { direction: "top" });
+      circle.addTo(map);
+      aqiLayersRef.current.push(circle);
+    }
+  }, [activeLayers, layerData, layerIntensity]);
+
+  // ── Population circles ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    populationRef.current.forEach(l => map.removeLayer(l));
+    populationRef.current = [];
+
+    const pts = layerData["population"];
+    if (!activeLayers.includes("population") || !pts?.length) return;
+    const L = require("leaflet");
+    const intensity = layerIntensity["population"] ?? 1.0;
+
+    for (const p of pts) {
+      const v = (p.intensity ?? 0.5) * intensity;
+      const r = Math.round(100 + v * 155);
+      const circle = L.circle([p.lat, p.lng], {
+        radius: 650,
+        color: `rgb(${Math.round(80 - v * 50)}%,${Math.round(70 - v * 55)}%,100%)`,
+        fillColor: `rgb(${Math.round(80 - v * 50)}%,${Math.round(70 - v * 55)}%,100%)`,
+        fillOpacity: 0.15 + v * 0.35, weight: 1, opacity: 0.5,
+      });
+      if (p.label) circle.bindTooltip(p.label, { sticky: true });
+      circle.addTo(map);
+      populationRef.current.push(circle);
+    }
+  }, [activeLayers, layerData, layerIntensity]);
+
+  // ── Facilities ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    facilityRef.current.forEach(l => map.removeLayer(l));
+    facilityRef.current = [];
+    if (!showFacilities || !facilities.length) return;
+    const L = require("leaflet");
+
+    for (const f of facilities) {
+      const [lng, lat] = f.geometry.coordinates;
+      const ftype = f.properties.facility_type ?? f.properties.amenity ?? "unknown";
+      const emoji = FACILITY_EMOJI[ftype] ?? "📍";
+      const icon = L.divIcon({
+        html: `<div style="width:24px;height:24px;border-radius:50%;background:#111;
+               border:1.5px solid #444;display:flex;align-items:center;
+               justify-content:center;font-size:13px">${emoji}</div>`,
+        className: "", iconSize: [24, 24], iconAnchor: [12, 12],
+      });
+      const marker = L.marker([lat, lng], { icon });
+      const p = f.properties;
+      marker.bindTooltip(
+        `<div style="font-size:12px"><b>${p.name}</b><br/>${p.facility_type}${p.phone ? `<br/>📞 ${p.phone}` : ""}${p.operator ? `<br/>${p.operator}` : ""}</div>`,
+        { direction: "top" }
+      );
+      marker.addTo(map);
+      facilityRef.current.push(marker);
+    }
+  }, [showFacilities, facilities]);
+
+  // ── Simulation overlay ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    simLayersRef.current.forEach(l => map.removeLayer(l));
+    simLayersRef.current = [];
+    if (!simulationResult) return;
+    const L = require("leaflet");
+
+    const { lat, lng } = simulationResult.incident;
+    const isRain = simulationResult.mode === "rain";
+    const incColor = isRain ? "#44aaff" : "#ff4444";
+
+    // Incident marker
+    const incIcon = L.divIcon({
+      html: `<div style="width:18px;height:18px;border-radius:50%;background:${incColor};
+             border:2px solid #fff;box-shadow:0 0 12px ${incColor}88"></div>`,
+      className: "", iconSize: [18, 18], iconAnchor: [9, 9],
+    });
+    simLayersRef.current.push(L.marker([lat, lng], { icon: incIcon }).addTo(map));
+
+    if (isRain) {
+      const circle = L.circle([lat, lng], {
+        radius: simulationResult.radius_km * 1000,
+        color: "#44aaff", fillColor: "#44aaff",
+        fillOpacity: 0.07, weight: 2, dashArray: "6 4",
+      }).addTo(map);
+      simLayersRef.current.push(circle);
+    }
+
+    for (const r of simulationResult.responders) {
+      const col = RESPONDER_COLOR[r.type] ?? "#ffffff";
+      const line = L.polyline([[lat, lng], [r.facility_lat, r.facility_lng]], {
+        color: col, weight: 2, opacity: 0.7,
+        dashArray: r.status === "UNDER-SERVED" ? "6 4" : undefined,
+      }).addTo(map);
+      const respIcon = L.divIcon({
+        html: `<div style="font-size:14px">${RESPONDER_EMOJI[r.type] ?? "🚨"}</div>`,
+        className: "", iconSize: [20, 20], iconAnchor: [10, 10],
+      });
+      const m = L.marker([r.facility_lat, r.facility_lng], { icon: respIcon })
+        .bindTooltip(`${r.name} — ${r.eta_minutes} min`, { direction: "top" })
+        .addTo(map);
+      simLayersRef.current.push(line, m);
+    }
+
+    map.setView([lat, lng], Math.max(map.getZoom(), 13));
   }, [simulationResult]);
 
-  // ── GeoJSON / KML Layer — red solid, all geometry types ──
+  // ── GeoJSON / KML layer ───────────────────────────────────────────────────
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    let cancelled = false;
-    (async () => {
-      geoJsonLayersRef.current.forEach((l) => { try { map.removeLayer(l); } catch {} });
-      geoJsonLayersRef.current = [];
-      if (!geoJsonLayer || geoJsonLayer.features.length === 0) return;
+    if (geoJsonRef.current) { map.removeLayer(geoJsonRef.current); geoJsonRef.current = null; }
+    if (!geoJsonLayer?.features?.length) return;
+    const L = require("leaflet");
 
-      const L = await import("leaflet");
-      if (cancelled) return;
+    const layer = L.geoJSON(
+      { type: "FeatureCollection", features: geoJsonLayer.features },
+      {
+        style: () => ({ color: "#ff2222", weight: 1.5, opacity: 0.8, fillOpacity: 0.15 }),
+        pointToLayer: (_: any, latlng: any) =>
+          L.circleMarker(latlng, { radius: 5, color: "#ff2222", fillOpacity: 0.7 }),
+        onEachFeature: (feature: any, l: any) => {
+          const props = feature.properties ?? {};
+          const lines = Object.entries(props).slice(0, 4).map(([k, v]) => `${k}: ${v}`).join("<br/>");
+          if (lines) l.bindTooltip(`<div style="font-size:11px">${lines}</div>`, { sticky: true });
+        },
+      }
+    ).addTo(map);
 
-      const dotIcon = L.divIcon({
-        className: "",
-        html: `<div style="width:10px;height:10px;border-radius:50%;background:#ff2222;border:2px solid #cc0000;box-shadow:0 0 6px rgba(255,34,34,0.8)"></div>`,
-        iconSize: [10, 10], iconAnchor: [5, 5],
-      });
+    geoJsonRef.current = layer;
+    try { map.fitBounds(layer.getBounds(), { padding: [20, 20] }); } catch {}
+  }, [geoJsonLayer]);
 
-      const geoLayer = (L as any).geoJSON(
-        { type: "FeatureCollection", features: geoJsonLayer.features },
-        {
-          style: () => ({
-            color: "#ff2222", weight: 2, opacity: 0.9,
-            fillColor: "#ff2222", fillOpacity: 0.35,
-          }),
-          pointToLayer: (_feat: any, latlng: any) => L.marker(latlng, { icon: dotIcon }),
-          onEachFeature: (_feat: any, layer: any) => {
-            const props = _feat.properties || {};
-            const tooltipHtml = Object.entries(props).slice(0, 4)
-              .map(([k, v]: [string, any]) => `<strong>${k}:</strong> ${v}`).join("<br/>") || "KML Feature";
-            layer.bindTooltip(`<div style="font-size:11px">${tooltipHtml}</div>`, { sticky: true, direction: "top" });
-          },
-        }
-      );
-      geoLayer.addTo(map);
-      geoJsonLayersRef.current.push(geoLayer);
-
-      try {
-        map.fitBounds(geoLayer.getBounds(), { padding: [30, 30], maxZoom: 14 });
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [geoJsonLayer, mapInitialized]);
-
-  const cursor =
-    simulationMode === "rain" ? "crosshair" :
-    simulationMode === "crime" ? "cell" :
-    "crosshair";
+  const cursor = simulationMode !== "none" ? "crosshair" : "crosshair";
 
   return (
-    <div ref={containerRef} className="w-full h-full" style={{ cursor, background: "#0d1117" }} />
+    <div
+      ref={containerRef}
+      className="w-full h-full"
+      style={{ cursor, background: "#0d1117" }}
+    />
   );
 }
 
