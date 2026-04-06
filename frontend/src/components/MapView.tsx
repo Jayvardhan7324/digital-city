@@ -550,8 +550,7 @@ function MapViewInner({
   return (
     <div
       ref={containerRef}
-      className="w-full h-full"
-      style={{ cursor, background: "#0d1117" }}
+      style={{ position: "absolute", inset: 0, cursor, background: "#0d1117" }}
     />
   );
 }
