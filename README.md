@@ -9,10 +9,15 @@ A full-stack smart-city analytics platform that layers real urban datasets onto 
 | Layer | Technology |
 |---|---|
 | Frontend | Next.js 15 (App Router), React 19, TypeScript |
-| Map | Leaflet, leaflet.heat, leaflet.markercluster |
+| Map | Leaflet.js, leaflet-heat, leaflet.markercluster |
 | Styling | Tailwind CSS v4, shadcn/ui |
 | Backend | FastAPI (Python 3.11+), Uvicorn |
+| Database | SQLite (via `database.py` + SQLAlchemy models) |
+| Auth | JWT (HS256, 8h tokens, `python-jose`) |
+| Cache | In-process TTL cache (2–15 min per source type) |
 | AI / LLM | Groq API — `llama-3.3-70b-versatile` |
+| Weather | Open-Meteo (free, no key required) |
+| Routing | OSRM (public API) + Dijkstra fallback |
 | Air Quality | AQICN API (live AQI stations) |
 | Geo | GeoPandas, Shapely |
 
@@ -24,104 +29,158 @@ A full-stack smart-city analytics platform that layers real urban datasets onto 
 digital_city/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py               # FastAPI app, CORS, router mounts
+│   │   ├── main.py                    # FastAPI app, CORS, router mounts (52 routes)
+│   │   ├── database.py                # SQLite engine, session factory
 │   │   ├── models/
-│   │   │   ├── report.py         # Pydantic models for citizen reports
-│   │   │   └── grid.py           # GridPoint model (lat, lng, intensity, label, color)
+│   │   │   ├── report.py              # Pydantic request/response models
+│   │   │   ├── grid.py                # GridPoint (lat, lng, intensity, label, color…)
+│   │   │   └── db_models.py           # SQLAlchemy ORM — CitizenReport table
 │   │   ├── routes/
-│   │   │   ├── aqi.py            # GET /aqi/stations  (live AQICN data)
-│   │   │   ├── heatmap.py        # GET /heatmap/{layer_id}
-│   │   │   ├── emergency.py      # GET /emergency/*
-│   │   │   ├── insights.py       # GET /insights/, /insights/ai
-│   │   │   ├── reports.py        # POST/GET /reports/
-│   │   │   ├── datasets.py       # GET /datasets/, /datasets/{id}
-│   │   │   ├── traffic.py        # GET /traffic/route
-│   │   │   └── kml.py            # GET /kml/{layer_id}
-│   │   ├── services/
-│   │   │   ├── heatmap_engine.py # All CSV loaders + layer dispatcher
-│   │   │   ├── groq_service.py   # Groq LLM integration
-│   │   │   ├── data_service.py   # Pothole CSV + synthetic drainage
-│   │   │   ├── coverage_engine.py# Emergency facility proximity
-│   │   │   ├── routing_service.py# Dijkstra pathfinding
-│   │   │   └── osm_service.py    # Live OSM facilities
-│   │   └── data/
-│   │       ├── bengaluru_potholes.csv
-│   │       └── ncrb_crime_2023.py
-│   ├── .env                      # API keys (committed — private repo)
-│   └── requirements.txt
+│   │   │   ├── heatmap.py             # GET /heatmap/{layer_id}
+│   │   │   ├── aqi.py                 # GET /aqi/stations (live AQICN)
+│   │   │   ├── reports.py             # CRUD + upvote + photo upload + WebSocket
+│   │   │   ├── traffic.py             # OSRM routing + Dijkstra fallback
+│   │   │   ├── analytics.py           # Pothole/crime/flood risk, anomalies, ward summary
+│   │   │   ├── auth.py                # POST /auth/login, GET /auth/verify (JWT)
+│   │   │   ├── layers.py              # BMTC, noise, metro, schools, streetlights,
+│   │   │   │                          #   trees, water-quality, construction, rainfall
+│   │   │   ├── weather.py             # Open-Meteo live weather stations + rainfall
+│   │   │   ├── emergency.py           # Simulation + OSM facilities
+│   │   │   ├── insights.py            # Groq LLM insights + chat
+│   │   │   ├── datasets.py            # Dataset browser
+│   │   │   └── kml.py                 # KML export
+│   │   └── services/
+│   │       ├── heatmap_engine.py      # All CSV loaders + layer dispatcher
+│   │       ├── analytics_service.py   # Risk scoring models
+│   │       ├── cache_service.py       # TTL in-memory cache
+│   │       ├── weather_service.py     # Open-Meteo wrapper
+│   │       ├── groq_service.py        # Groq LLM integration
+│   │       ├── coverage_engine.py     # Emergency facility proximity
+│   │       ├── routing_service.py     # Dijkstra pathfinding
+│   │       └── osm_service.py         # Live OSM facilities
 │
-├── datasets/                     # Real Bengaluru datasets
+├── datasets/                          # Real + synthetic Bengaluru datasets
 │   ├── bengaluru_crime_data.csv
-│   ├── bengaluru_traffic_data.csv
-│   ├── bengaluru_potholes.csv
+│   ├── bengaluru_potholes.csv         # ~789 real records
 │   ├── garbage_dump_banglore.csv
-│   ├── btp_2025_station_wise.csv
+│   ├── btp_2025_station_wise.csv      # BTP road crash stations
 │   ├── stp.csv.csv
 │   ├── street_dogs_banglore.csv
 │   ├── tax_collection_with_coords.csv
 │   ├── population_with_latlon.csv
 │   ├── bescom_with_latlon.csv
 │   ├── weather_stations_with_coords.csv
-│   └── automated_weather_stations_banglore.csv
+│   ├── bmtc_bus_stops.csv             # 205 stops (seed=2025)
+│   ├── metro_stations.csv             # 20 stations across 3 lines
+│   ├── noise_stations.csv             # 67 noise monitors
+│   ├── school_locations.csv           # 110 schools/colleges
+│   ├── street_lights.csv              # 483 lights (working/dim/faulty)
+│   ├── tree_canopy.csv                # 246 canopy zones
+│   ├── bwssb_water_zones.csv          # 16 water quality zones
+│   ├── construction_permits.csv       # 151 active permits
+│   └── generate_new_datasets.py       # Reproducible seed=2025 generator
 │
 ├── frontend/
 │   ├── src/
 │   │   ├── app/
-│   │   │   ├── page.tsx          # Main dashboard — sidebar, layers, simulation, chat
-│   │   │   └── layout.tsx
+│   │   │   ├── page.tsx               # Main dashboard — sidebar, layers, AI chat, export
+│   │   │   ├── layout.tsx             # HTML shell, ThemeProvider, global fonts
+│   │   │   └── globals.css            # Tailwind v4 + dark/light CSS variables
 │   │   └── components/
-│   │       ├── MapView.tsx       # All map rendering (heatmaps, dots, circles, simulation)
-│   │       ├── InsightCard.tsx   # Weakness card (severity + recommendation)
-│   │       ├── GroqInsightButton.tsx
-│   │       ├── ReportModal.tsx   # Click-to-report modal
-│   │       └── DatasetSelector.tsx
+│   │       ├── MapView.tsx            # All map rendering (heatmaps, dots, circles,
+│   │       │                          #   metro lines, simulation overlay)
+│   │       ├── AlertPanel.tsx         # WebSocket live feed with anomaly severity
+│   │       ├── LegendPanel.tsx        # Color scales for all active layers
+│   │       ├── ThemeProvider.tsx      # Dark/light theme persistence (localStorage)
+│   │       ├── InsightCard.tsx        # Weakness card (severity + recommendation)
+│   │       ├── GroqInsightButton.tsx  # Trigger Groq LLM analysis
+│   │       ├── ReportModal.tsx        # Click-to-report modal
+│   │       └── DatasetSelector.tsx    # Raw dataset browser
 │   └── package.json
 │
+├── smartcity.db                       # SQLite — citizen reports (gitignored)
 └── README.md
 ```
 
 ---
 
-## Map Layers
+## Map Layers (21 total)
 
+### Infrastructure
 | Layer | Visual | Data Source | Endpoint |
 |---|---|---|---|
-| Traffic | Heatmap (yellow) | `bengaluru_traffic_data.csv` | `/heatmap/traffic` |
+| Traffic | Heatmap (amber) | `bengaluru_traffic_data.csv` | `/heatmap/traffic` |
+| Potholes | Orange dots | `bengaluru_potholes.csv` | `/heatmap/pothole` |
+| Road Crashes | Red dots | `btp_2025_station_wise.csv` | `/heatmap/crashes` |
+| Street Lights | Dots (green/amber/red by status) | `street_lights.csv` | `/layers/streetlights` |
+| Construction | Orange dots | `construction_permits.csv` | `/layers/construction` |
+
+### Environment
+| Layer | Visual | Data Source | Endpoint |
+|---|---|---|---|
+| Air Quality (AQI) | Color-coded circles | Live — AQICN API | `/aqi/stations` |
+| Noise Pollution | Heatmap (red) | `noise_stations.csv` | `/layers/noise` |
+| Rainfall (Live) | Heatmap (blue) | Open-Meteo / `bwssb_water_zones.csv` | `/layers/rainfall` |
+| Tree Canopy | Heatmap (green) | `tree_canopy.csv` | `/layers/trees` |
+| Drainage Issues | Blue dots | Synthetic (zone-based) | `/heatmap/drainage` |
+
+### Safety
+| Layer | Visual | Data Source | Endpoint |
+|---|---|---|---|
 | Crime | Red dots | `bengaluru_crime_data.csv` | `/heatmap/crime` |
 | Crime (NCRB 2023) | Heatmap (red) | `ncrb_crime_2023.py` | `/heatmap/crime_ncrb` |
 | Garbage Dumps | Green dots | `garbage_dump_banglore.csv` | `/heatmap/garbage_dump` |
-| Potholes | Orange dots | `bengaluru_potholes.csv` | `/heatmap/pothole` |
-| Drainage | Blue dots | Synthetic (zone-based) | `/heatmap/drainage` |
-| STP Plants | Teal dots | `stp.csv.csv` | `/heatmap/stp` |
 | Street Dogs | Heatmap (orange) | `street_dogs_banglore.csv` | `/heatmap/street_dogs` |
-| Road Crashes | Red dots | `btp_2025_station_wise.csv` | `/heatmap/crashes` |
-| Tax Collection | Amber circles | `tax_collection_with_coords.csv` (latest FY) | `/heatmap/tax_collection` |
-| Population Density | Blue-indigo circles | `population_with_latlon.csv` | `/heatmap/population` |
+
+### Utilities
+| Layer | Visual | Data Source | Endpoint |
+|---|---|---|---|
 | BESCOM Substations | Orange dots | `bescom_with_latlon.csv` | `/heatmap/bescom` |
+| STP Plants | Teal factory icons | `stp.csv.csv` | `/heatmap/stp` |
+| Water Quality | Color-coded dots | `bwssb_water_zones.csv` | `/layers/water-quality` |
+
+### Transport
+| Layer | Visual | Data Source | Endpoint |
+|---|---|---|---|
+| BMTC Bus Stops | Bus icons | `bmtc_bus_stops.csv` | `/layers/bmtc` |
+| Metro Stations | Line-colored markers | `metro_stations.csv` | `/layers/metro` |
+
+### Demographics
+| Layer | Visual | Data Source | Endpoint |
+|---|---|---|---|
+| Population Density | Blue-indigo circles | `population_with_latlon.csv` | `/heatmap/population` |
+| Schools & Colleges | Purple dots | `school_locations.csv` | `/layers/schools` |
+| Tax Collection | Amber ward circles | `tax_collection_with_coords.csv` | `/heatmap/tax_collection` |
 | Weather Stations | Cyan dots | `weather_stations_with_coords.csv` | `/heatmap/weather_station` |
-| Air Quality (AQI) | Colour-coded circles | Live — AQICN API | `/aqi/stations` |
-
-### AQI Colour Scale
-| AQI Range | Category | Colour |
-|---|---|---|
-| 0–50 | Good | Green |
-| 51–100 | Moderate | Yellow |
-| 101–150 | Unhealthy for Sensitive Groups | Orange |
-| 151–200 | Unhealthy | Red |
-| 201–300 | Very Unhealthy | Purple |
-| 300+ | Hazardous | Maroon |
-
-All circle/dot layers show a **hover tooltip** with detailed data (ward name, collection amount, population breakdown, voltage class, AQI value, etc.).
 
 ---
 
-## Simulation
+## Features
 
-### Emergency Response Simulation
-Click the **Crime** or **Rain** button in the sidebar, then click anywhere on the map to simulate an emergency incident. The dashboard shows:
-- Nearest responders (police / fire / hospital) with ETA
-- Response lines colour-coded by responder type
-- Under-served zones flagged with delay warnings
+### Real-time & Live Data
+- **WebSocket live feed** (`/ws/reports`) — pushes new citizen reports and periodic anomaly alerts to `AlertPanel`
+- **Open-Meteo weather** — live rainfall and station data, no API key required
+- **AQICN AQI** — live air quality circles for Bengaluru bounding box
+
+### AI & Analytics
+- **Groq LLM chat** — context-aware (sends active layer IDs + point counts with each message)
+- **Predictive analytics** — pothole-risk, crime-hotspot, and flood-risk ward scoring (`/analytics/*`)
+- **Anomaly detection** — automatic alert generation from report patterns
+
+### Emergency Simulation
+Click **Crime** or **Rain** in the sidebar, then click the map to simulate an incident:
+- Nearest police / fire / hospital with ETA
+- Response lines color-coded by responder type
+- Under-served zones flagged in red
+
+### Other
+- **JWT auth** — admin login at `/auth/login`, 8h tokens
+- **Citizen reports** — click map to file a report; supports photo upload (5 MB limit) and upvoting
+- **Nominatim geocoder** — search any Bengaluru location and jump to it
+- **PNG / PDF export** — captures the current map viewport
+- **KML/KMZ upload** — drag-and-drop any GeoJSON/KML layer onto the map
+- **Per-layer intensity sliders** — fine-tune heatmap opacity/dot size
+- **Dark / light theme** — persisted in `localStorage`
 
 ---
 
@@ -133,19 +192,15 @@ Click the **Crime** or **Rain** button in the sidebar, then click anywhere on th
 
 ### 1. Backend
 
-```powershell
+```bash
 cd backend
-
-# One-time setup
 python -m venv venv
-venv\Scripts\activate
+source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-# Start server
 uvicorn app.main:app --reload --port 8000
 ```
 
-API runs at `http://localhost:8000` — interactive docs at `http://localhost:8000/docs`.
+API docs: `http://localhost:8000/docs`
 
 ### 2. Frontend
 
@@ -155,39 +210,59 @@ npm install
 npm run dev
 ```
 
-Frontend runs at `http://localhost:3000`.
+Dashboard: `http://localhost:3000`
 
 ---
 
 ## Environment Variables
 
-All keys are pre-filled in `backend/.env` (private repo):
+Create `backend/.env`:
 
 ```env
-GROQ_API_KEY=...           # Groq LLM — AI insights & chat
-OPENWEATHER_API_KEY=...    # OpenWeather (available for future use)
-AQICN_TOKEN=...            # AQICN — live AQI station data
+GROQ_API_KEY=...        # groq.com — free tier, llama-3.3-70b-versatile
+AQICN_TOKEN=...         # aqicn.org/api — free token for live AQI
+ADMIN_SECRET=...        # any string — used to sign JWT tokens
 ```
 
-To get your own keys:
-- **Groq**: [console.groq.com](https://console.groq.com) (free tier)
-- **AQICN**: [aqicn.org/api](https://aqicn.org/api) (free token)
+Open-Meteo needs no key.
 
 ---
 
-## API Reference
+## Full API Reference
 
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/heatmap/{layer_id}` | Intensity points for any layer |
-| GET | `/aqi/stations` | Live AQI stations for Bengaluru bounding box |
+| GET | `/aqi/stations` | Live AQI stations (AQICN) |
+| GET | `/layers/bmtc` | BMTC bus stop points |
+| GET | `/layers/metro` | Metro station points with line colors |
+| GET | `/layers/noise` | Noise monitor heatmap points |
+| GET | `/layers/schools` | School/college locations |
+| GET | `/layers/streetlights` | Street light status points |
+| GET | `/layers/trees` | Tree canopy heatmap points |
+| GET | `/layers/water-quality` | BWSSB water quality points |
+| GET | `/layers/construction` | Active construction permit points |
+| GET | `/layers/rainfall` | Live/synthetic rainfall heatmap |
+| GET | `/weather/stations` | Open-Meteo weather station data |
+| GET | `/weather/rainfall` | Live rainfall readings |
+| GET | `/analytics/pothole-risk` | Ward-level pothole risk scores |
+| GET | `/analytics/crime-hotspot` | Ward-level crime hotspot scores |
+| GET | `/analytics/flood-risk` | Ward-level flood risk scores |
+| GET | `/analytics/anomalies` | Auto-detected anomalies from reports |
+| GET | `/analytics/ward-summary` | Full ward summary table |
+| POST | `/auth/login` | Get JWT token (`{ secret: "..." }`) |
+| GET | `/auth/verify` | Verify JWT token |
 | GET | `/insights/` | Ranked infrastructure weakness report |
 | GET | `/insights/ai` | Groq LLM city analysis |
-| POST | `/insights/chat` | Ask anything about Bengaluru |
-| GET | `/datasets/` | List available datasets |
-| GET | `/datasets/{id}` | Raw dataset points |
-| GET | `/emergency/simulate?lat=&lng=&mode=crime` | Emergency response simulation |
-| GET | `/emergency/facilities-osm?city=Bangalore&amenity=all` | Live OSM facilities |
+| POST | `/insights/chat` | Conversational city assistant |
+| GET | `/reports/` | List citizen reports (from SQLite) |
 | POST | `/reports/` | Submit citizen report |
-| GET | `/traffic/route?from_lat=&from_lng=&to_lat=&to_lng=` | Route + ETA |
-| GET | `/kml/{layer_id}` | Export layer as KML |
+| POST | `/reports/with-photo` | Submit report with photo (multipart, 5 MB) |
+| POST | `/reports/{id}/upvote` | Upvote a report (IP-hash dedup) |
+| WS | `/ws/reports` | WebSocket — live report + anomaly feed |
+| GET | `/emergency/simulate` | Emergency response simulation |
+| GET | `/emergency/facilities-osm` | Live OSM emergency facilities |
+| GET | `/traffic/route` | OSRM route + ETA (Dijkstra fallback) |
+| GET | `/datasets/` | List available raw datasets |
+| GET | `/datasets/{id}` | Raw dataset points |
+| GET | `/kml/{layer_id}` | Export layer as GeoJSON/KML |
